@@ -1,0 +1,110 @@
+---
+# Source: aerospike_local_volume_provisioner-fs-ssd.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: local-filesystem-provisioner-config
+  namespace: aerospike
+data:
+  useNodeNameOnly: "true"
+  storageClassMap: |
+    fs-ssd:
+       hostDir: /mnt/fs-disks
+       mountDir:  /mnt/fs-disks
+       blockCleanerCommand:
+         - "/scripts/shred.sh"
+         - "2"
+       volumeMode: Filesystem
+       fsType: xfs
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: local-filesystem-volume-provisioner
+  namespace: aerospike
+  labels:
+    app: local-filesystem-volume-provisioner
+spec:
+  selector:
+    matchLabels:
+      app: local-filesystem-volume-provisioner
+  template:
+    metadata:
+      labels:
+        app: local-filesystem-volume-provisioner
+    spec:
+      serviceAccountName: local-filesystem-storage-admin
+      containers:
+        - image: "k8s.gcr.io/sig-storage/local-volume-provisioner:v2.4.0"
+          imagePullPolicy: "Always"
+          name: provisioner
+          securityContext:
+            privileged: true
+          env:
+          - name: MY_NODE_NAME
+            valueFrom:
+              fieldRef:
+                fieldPath: spec.nodeName
+          volumeMounts:
+            - mountPath: /etc/provisioner/config
+              name: provisioner-config
+              readOnly: true
+            - mountPath:  /mnt/fs-disks
+              name: fs-ssd
+              mountPropagation: "HostToContainer"
+      #tolerations:
+      #  - key: storageType
+      #    operator: "Equal"
+      #    value: filesystem
+      #    effect: NoSchedule              
+      volumes:
+        - name: provisioner-config
+          configMap:
+            name: local-filesystem-provisioner-config
+        - name: fs-ssd
+          hostPath:
+            path: /mnt/fs-disks
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: local-filesystem-storage-admin
+  namespace: aerospike
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: local-filesystem-storage-provisioner-pv-binding
+  namespace: aerospike
+subjects:
+- kind: ServiceAccount
+  name: local-filesystem-storage-admin
+  namespace: aerospike
+roleRef:
+  kind: ClusterRole
+  name: system:persistent-volume-provisioner
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: local-filesystem-storage-provisioner-node-clusterrole
+  namespace: aerospike
+rules:
+- apiGroups: [""]
+  resources: ["nodes"]
+  verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: local-filesystem-storage-provisioner-node-binding
+  namespace: aerospike
+subjects:
+- kind: ServiceAccount
+  name: local-filesystem-storage-admin
+  namespace: aerospike
+roleRef:
+  kind: ClusterRole
+  name: local-filesystem-storage-provisioner-node-clusterrole
+  apiGroup: rbac.authorization.k8s.io
